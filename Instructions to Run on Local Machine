@@ -1,0 +1,14 @@
+1. Ensure Oracle database is running.
+
+2. Create a directory object for file processing:
+    CREATE OR REPLACE DIRECTORY DATA_DIR AS 'C:\\data\\';
+    GRANT READ, WRITE ON DIRECTORY DATA_DIR TO your_user;
+
+3. Copy the CSV files to 'C:\\data\\'.
+
+4. Execute the PL/SQL package:
+   BEGIN
+        stock_reconciliation_pkg.process_files('exchange.csv', 'depository.csv');
+   END;    
+5. Check the stock_mismatch_log table for results:
+   SELECT * FROM stock_mismatch_log;
