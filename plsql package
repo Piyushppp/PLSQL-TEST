@@ -1,0 +1,140 @@
+-- Database Schema
+CREATE TABLE stock_exchange (
+    user_id         NUMBER,
+    stock_id        VARCHAR2(50),
+    stock_name      VARCHAR2(100),
+    stock_count     NUMBER,
+    received_date   DATE DEFAULT SYSDATE,
+    CONSTRAINT pk_stock_exchange PRIMARY KEY (user_id, stock_id)
+);
+
+CREATE TABLE stock_depository (
+    user_id         NUMBER,
+    stock_id        VARCHAR2(50),
+    stock_name      VARCHAR2(100),
+    stock_count     NUMBER,
+    received_date   DATE DEFAULT SYSDATE,
+    CONSTRAINT pk_stock_depository PRIMARY KEY (user_id, stock_id)
+);
+
+CREATE TABLE stock_mismatch_log (
+    log_id         NUMBER GENERATED ALWAYS AS IDENTITY,
+    user_id        NUMBER,
+    stock_id       VARCHAR2(50),
+    stock_name     VARCHAR2(100),
+    exchange_count NUMBER,
+    depository_count NUMBER,
+    log_date       DATE DEFAULT SYSDATE,
+    error_message  VARCHAR2(255),
+    CONSTRAINT pk_stock_mismatch_log PRIMARY KEY (log_id)
+);
+
+-- Package Specification
+CREATE OR REPLACE PACKAGE stock_reconciliation_pkg AS
+    PROCEDURE process_files(exchange_file_path VARCHAR2, depository_file_path VARCHAR2);
+END stock_reconciliation_pkg;
+/
+
+-- Package Body
+CREATE OR REPLACE PACKAGE BODY stock_reconciliation_pkg AS
+    PROCEDURE process_files(exchange_file_path VARCHAR2, depository_file_path VARCHAR2) IS
+        v_file UTL_FILE.FILE_TYPE;
+        v_line VARCHAR2(4000);
+        v_user_id NUMBER;
+        v_stock_id VARCHAR2(50);
+        v_stock_name VARCHAR2(100);
+        v_stock_count NUMBER;
+    BEGIN
+        BEGIN
+            -- Process Exchange File
+            v_file := UTL_FILE.FOPEN('DATA_DIR', exchange_file_path, 'R');
+            LOOP
+                BEGIN
+                    UTL_FILE.GET_LINE(v_file, v_line);
+                    v_user_id := TO_NUMBER(REGEXP_SUBSTR(v_line, '[^,]+', 1, 1));
+                    v_stock_id := REGEXP_SUBSTR(v_line, '[^,]+', 1, 2);
+                    v_stock_name := REGEXP_SUBSTR(v_line, '[^,]+', 1, 3);
+                    v_stock_count := TO_NUMBER(REGEXP_SUBSTR(v_line, '[^,]+', 1, 4));
+                    IF v_user_id IS NULL OR v_stock_id IS NULL OR v_stock_name IS NULL OR v_stock_count IS NULL THEN
+                        INSERT INTO stock_mismatch_log (error_message)
+                        VALUES ('Incomplete data in exchange file');
+                        CONTINUE;
+                    END IF;
+                    INSERT INTO stock_exchange (user_id, stock_id, stock_name, stock_count) 
+                    VALUES (v_user_id, v_stock_id, v_stock_name, v_stock_count);
+                EXCEPTION
+                    WHEN OTHERS THEN 
+                        INSERT INTO stock_mismatch_log (error_message) 
+                        VALUES ('Error processing exchange file: ' || SQLERRM);
+                        EXIT;
+                END;
+            END LOOP;
+            UTL_FILE.FCLOSE(v_file);
+        EXCEPTION
+            WHEN UTL_FILE.INVALID_PATH THEN 
+                INSERT INTO stock_mismatch_log (error_message) VALUES ('Exchange file missing or corrupt');
+                RETURN;
+        END;
+
+        BEGIN
+            -- Process Depository File
+            v_file := UTL_FILE.FOPEN('DATA_DIR', depository_file_path, 'R');
+            LOOP
+                BEGIN
+                    UTL_FILE.GET_LINE(v_file, v_line);
+                    v_user_id := TO_NUMBER(REGEXP_SUBSTR(v_line, '[^,]+', 1, 1));
+                    v_stock_id := REGEXP_SUBSTR(v_line, '[^,]+', 1, 2);
+                    v_stock_name := REGEXP_SUBSTR(v_line, '[^,]+', 1, 3);
+                    v_stock_count := TO_NUMBER(REGEXP_SUBSTR(v_line, '[^,]+', 1, 4));
+                    IF v_user_id IS NULL OR v_stock_id IS NULL OR v_stock_name IS NULL OR v_stock_count IS NULL THEN
+                        INSERT INTO stock_mismatch_log (error_message)
+                        VALUES ('Incomplete data in depository file');
+                        CONTINUE;
+                    END IF;
+                    INSERT INTO stock_depository (user_id, stock_id, stock_name, stock_count) 
+                    VALUES (v_user_id, v_stock_id, v_stock_name, v_stock_count);
+                EXCEPTION
+                    WHEN OTHERS THEN 
+                        INSERT INTO stock_mismatch_log (error_message) 
+                        VALUES ('Error processing depository file: ' || SQLERRM);
+                        EXIT;
+                END;
+            END LOOP;
+            UTL_FILE.FCLOSE(v_file);
+        EXCEPTION
+            WHEN UTL_FILE.INVALID_PATH THEN 
+                INSERT INTO stock_mismatch_log (error_message) VALUES ('Depository file missing or corrupt');
+                RETURN;
+        END;
+
+        -- Identify Mismatches
+        INSERT INTO stock_mismatch_log (user_id, stock_id, stock_name, exchange_count, depository_count, error_message)
+        SELECT e.user_id, e.stock_id, e.stock_name, e.stock_count, d.stock_count, 'Stock count mismatch'
+        FROM stock_exchange e
+        JOIN stock_depository d ON e.user_id = d.user_id AND e.stock_id = d.stock_id
+        WHERE e.stock_count <> d.stock_count;
+
+        -- Identify Missing Records
+        INSERT INTO stock_mismatch_log (user_id, stock_id, stock_name, exchange_count, depository_count, error_message)
+        SELECT e.user_id, e.stock_id, e.stock_name, e.stock_count, NULL, 'Stock missing in depository'
+        FROM stock_exchange e
+        LEFT JOIN stock_depository d ON e.user_id = d.user_id AND e.stock_id = d.stock_id
+        WHERE d.stock_id IS NULL;
+
+        INSERT INTO stock_mismatch_log (user_id, stock_id, stock_name, exchange_count, depository_count, error_message)
+        SELECT d.user_id, d.stock_id, d.stock_name, NULL, d.stock_count, 'Stock missing in exchange'
+        FROM stock_depository d
+        LEFT JOIN stock_exchange e ON e.user_id = d.user_id AND e.stock_id = d.stock_id
+        WHERE e.stock_id IS NULL;
+    END process_files;
+END stock_reconciliation_pkg;
+/
+
+-- Test Cases
+-- 1. Case where all data matches perfectly.
+-- 2. Case where stock counts differ between exchange and depository.
+-- 3. Case where stock is missing in exchange but present in depository.
+-- 4. Case where stock is missing in depository but present in exchange.
+-- 5. Case with incomplete or corrupt data in the input files.
+
+
