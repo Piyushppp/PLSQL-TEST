@@ -4,7 +4,6 @@ CREATE TABLE stock_exchange (
     stock_id        VARCHAR2(50),
     stock_name      VARCHAR2(100),
     stock_count     NUMBER,
-    received_date   DATE DEFAULT SYSDATE,
     CONSTRAINT pk_stock_exchange PRIMARY KEY (user_id, stock_id)
 );
 
@@ -13,7 +12,6 @@ CREATE TABLE stock_depository (
     stock_id        VARCHAR2(50),
     stock_name      VARCHAR2(100),
     stock_count     NUMBER,
-    received_date   DATE DEFAULT SYSDATE,
     CONSTRAINT pk_stock_depository PRIMARY KEY (user_id, stock_id)
 );
 
